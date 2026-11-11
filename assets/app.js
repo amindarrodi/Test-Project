@@ -1,6 +1,7 @@
 const fa = new Intl.NumberFormat('fa-IR', {maximumFractionDigits: 2});
 const $ = (selector) => document.querySelector(selector);
 let rates = null;
+const isPreview = document.documentElement.dataset.preview === 'true';
 const labels = {USD:'دلار', EUR:'یورو', IRT:'تومان'};
 $('#today').textContent = new Intl.DateTimeFormat('fa-IR', {weekday:'long', year:'numeric', month:'long', day:'numeric'}).format(new Date());
 function format(n) { return fa.format(n); }
@@ -13,12 +14,34 @@ function convert() {
   $('#result').textContent = format(amount * values[from] / values[to]);
   $('#conversion-note').textContent = `هر ۱ ${labels[from]} برابر با ${format(values[from] / values[to])} ${labels[to]}`;
 }
+async function previewRates() {
+  // GitHub Pages cannot execute PHP, so the preview uses the same public sources directly.
+  const [fxResponse, goldResponse] = await Promise.all([
+    fetch('https://open.er-api.com/v6/latest/USD', {cache:'no-store'}),
+    fetch('https://api.gold-api.com/price/XAU', {cache:'no-store'}).catch(() => null)
+  ]);
+  if (!fxResponse.ok) throw new Error('unavailable');
+  const fx = await fxResponse.json();
+  const irr = Number(fx.rates?.IRR), eur = Number(fx.rates?.EUR);
+  if (!Number.isFinite(irr) || irr <= 0 || !Number.isFinite(eur) || eur <= 0) throw new Error('invalid rates');
+  let xau = null;
+  if (goldResponse?.ok) {
+    try { const gold = await goldResponse.json(); const price = Number(gold.price); if (Number.isFinite(price) && price > 0) xau = price; } catch (_) {}
+  }
+  const usd = irr / 10;
+  return {fetched_at: Math.floor(Date.now() / 1000), stale: false,
+    rates: {USD: usd, EUR: usd / eur, XAU: xau, GOLD: xau === null ? null : xau / 31.1034768 * 0.75 * usd}};
+}
 async function loadRates() {
   const refresh = $('#refresh'); refresh.classList.add('spinning'); $('#update-label').textContent = 'در حال دریافت اطلاعات...';
   try {
-    const response = await fetch('api/rates.php', {cache:'no-store'});
-    const data = await response.json();
-    if (!response.ok || !data.rates) throw new Error('unavailable');
+    let data;
+    if (isPreview) { data = await previewRates(); }
+    else {
+      const response = await fetch('api/rates.php', {cache:'no-store'});
+      data = await response.json();
+      if (!response.ok || !data.rates) throw new Error('unavailable');
+    }
     rates = data.rates;
     document.querySelectorAll('[data-rate]').forEach(el => { const value = rates[el.dataset.rate]; el.textContent = typeof value === 'number' ? format(value) : 'ناموجود'; });
     const date = new Date(data.fetched_at * 1000);
